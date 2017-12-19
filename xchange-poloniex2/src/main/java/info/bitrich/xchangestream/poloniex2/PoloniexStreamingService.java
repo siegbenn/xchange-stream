@@ -97,10 +97,10 @@ public class PoloniexStreamingService extends JsonNettyStreamingService {
     mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     return subscribeChannel(channelName)
-      .flatMapIterable(s -> {
-        PoloniexWebSocketEventsTransaction transaction = mapper.readValue(s.toString(), PoloniexWebSocketEventsTransaction.class);
-        return Arrays.asList(transaction.getEvents());
-      }).share();
+            .flatMapIterable(s -> {
+              PoloniexWebSocketEventsTransaction transaction = mapper.readValue(s.toString(), PoloniexWebSocketEventsTransaction.class);
+              return Arrays.asList(transaction.getEvents());
+            }).share();
   }
 
   @Override
@@ -153,9 +153,9 @@ public class PoloniexStreamingService extends JsonNettyStreamingService {
         isManualDisconnect = false;
       } else {
         super.channelInactive(ctx);
-        LOG.info("Reopening websocket because it was closed by the host");
+        LOG.info("Reopening Poloniex websocket because it was closed by the host");
         connect().blockingAwait();
-        LOG.info("Resubscribing channels");
+        LOG.info("Resubscribing to Poloniex channels");
         resubscribeChannels();
       }
     }

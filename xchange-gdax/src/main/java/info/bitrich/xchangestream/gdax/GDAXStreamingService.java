@@ -10,6 +10,7 @@ import info.bitrich.xchangestream.service.netty.WebSocketClientHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
 import io.netty.handler.codec.http.websocketx.extensions.WebSocketClientExtensionHandler;
+import io.reactivex.Completable;
 import io.reactivex.Observable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,7 +26,9 @@ public class GDAXStreamingService extends JsonNettyStreamingService {
   private static final String SHARE_CHANNEL_NAME = "ALL";
   private final Map<String, Observable<JsonNode>> subscriptions = new HashMap<>();
   private ProductSubscription product = null;
-  
+  private boolean isManualDisconnect = false;
+
+
   private WebSocketClientHandler.WebSocketMessageHandler channelInactiveHandler = null;
 
   public GDAXStreamingService(String apiUrl) {
@@ -37,14 +40,20 @@ public class GDAXStreamingService extends JsonNettyStreamingService {
   }
 
   @Override
+  public Completable disconnect() {
+    isManualDisconnect = true;
+    return super.disconnect();
+  }
+
+  @Override
   public String getSubscriptionUniqueId(String channelName, Object... args) {
     return SHARE_CHANNEL_NAME;
   }
 
   /**
-   * Subscribes to the provided channel name, maintains a cache of subscriptions, in order not to 
+   * Subscribes to the provided channel name, maintains a cache of subscriptions, in order not to
    * subscribe more than once to the same channel.
-   * 
+   *
    * @param channelName the name of the requested channel.
    * @return an Observable of json objects coming from the exchange.
    */
@@ -55,10 +64,10 @@ public class GDAXStreamingService extends JsonNettyStreamingService {
     if (!channels.containsKey(channelName) && !subscriptions.containsKey(channelName)){
       subscriptions.put(channelName, super.subscribeChannel(channelName, args));
     }
-    
+
     return subscriptions.get(channelName);
   }
-  
+
   @Override
   protected String getChannelNameFromMessage(JsonNode message) {
     return SHARE_CHANNEL_NAME;
@@ -74,7 +83,7 @@ public class GDAXStreamingService extends JsonNettyStreamingService {
   @Override
   public String getUnsubscribeMessage(String channelName) throws IOException {
     GDAXWebSocketSubscriptionMessage subscribeMessage =
-      new GDAXWebSocketSubscriptionMessage(UNSUBSCRIBE, new String[]{"level2", "matches", "ticker"});
+            new GDAXWebSocketSubscriptionMessage(UNSUBSCRIBE, new String[]{"level2", "matches", "ticker"});
     ObjectMapper objectMapper = new ObjectMapper();
     return objectMapper.writeValueAsString(subscribeMessage);
   }
@@ -88,14 +97,14 @@ public class GDAXStreamingService extends JsonNettyStreamingService {
   protected WebSocketClientExtensionHandler getWebSocketClientExtensionHandler() {
     return WebSocketClientCompressionAllowClientNoContextHandler.INSTANCE;
   }
-  
+
   @Override
-  protected WebSocketClientHandler getWebSocketClientHandler(WebSocketClientHandshaker handshaker, 
+  protected WebSocketClientHandler getWebSocketClientHandler(WebSocketClientHandshaker handshaker,
                                                              WebSocketClientHandler.WebSocketMessageHandler handler) {
     LOG.info("Registering GDAXWebSocketClientHandler");
     return new GDAXWebSocketClientHandler(handshaker, handler);
   }
-  
+
   public void setChannelInactiveHandler(WebSocketClientHandler.WebSocketMessageHandler channelInactiveHandler) {
     this.channelInactiveHandler = channelInactiveHandler;
   }
@@ -121,9 +130,14 @@ public class GDAXStreamingService extends JsonNettyStreamingService {
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
-      super.channelInactive(ctx);
-      if (channelInactiveHandler != null){
-        channelInactiveHandler.onMessage("WebSocket Client disconnected!");
+      if (isManualDisconnect) {
+        isManualDisconnect = false;
+      } else {
+        super.channelInactive(ctx);
+        LOG.info("Reopening GDAX websocket because it was closed by the host");
+        connect().blockingAwait();
+        LOG.info("Resubscribing to GDAX channels");
+        resubscribeChannels();
       }
     }
   }
