@@ -7,6 +7,10 @@ import info.bitrich.xchangestream.poloniex2.dto.PoloniexWebSocketEvent;
 import info.bitrich.xchangestream.poloniex2.dto.PoloniexWebSocketEventsTransaction;
 import info.bitrich.xchangestream.poloniex2.dto.PoloniexWebSocketSubscriptionMessage;
 import info.bitrich.xchangestream.service.netty.JsonNettyStreamingService;
+import info.bitrich.xchangestream.service.netty.WebSocketClientHandler;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
+import io.reactivex.Completable;
 import io.reactivex.Observable;
 import org.knowm.xchange.currency.CurrencyPair;
 import org.slf4j.Logger;
@@ -27,6 +31,7 @@ public class PoloniexStreamingService extends JsonNettyStreamingService {
 
   private final Map<String, String> subscribedChannels = new HashMap<>();
   private final Map<String, Observable<JsonNode>> subscriptions = new HashMap<>();
+  private boolean isManualDisconnect = false;
 
   public PoloniexStreamingService(String apiUrl) {
     super(apiUrl, Integer.MAX_VALUE);
@@ -92,10 +97,10 @@ public class PoloniexStreamingService extends JsonNettyStreamingService {
     mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     return subscribeChannel(channelName)
-      .flatMapIterable(s -> {
-        PoloniexWebSocketEventsTransaction transaction = mapper.readValue(s.toString(), PoloniexWebSocketEventsTransaction.class);
-        return Arrays.asList(transaction.getEvents());
-      }).share();
+            .flatMapIterable(s -> {
+              PoloniexWebSocketEventsTransaction transaction = mapper.readValue(s.toString(), PoloniexWebSocketEventsTransaction.class);
+              return Arrays.asList(transaction.getEvents());
+            }).share();
   }
 
   @Override
@@ -122,5 +127,37 @@ public class PoloniexStreamingService extends JsonNettyStreamingService {
 
     ObjectMapper objectMapper = new ObjectMapper();
     return objectMapper.writeValueAsString(subscribeMessage);
+  }
+
+  @Override
+  public Completable disconnect() {
+    isManualDisconnect = true;
+    return super.disconnect();
+  }
+
+  @Override
+  protected WebSocketClientHandler getWebSocketClientHandler(WebSocketClientHandshaker handshaker,
+                                                             WebSocketClientHandler.WebSocketMessageHandler handler) {
+    LOG.info("Registering Poloniex2WebSocketClientHandler");
+    return new Poloniex2WebSocketClientHandler(handshaker, handler);
+  }
+
+  private class Poloniex2WebSocketClientHandler extends  WebSocketClientHandler{
+    Poloniex2WebSocketClientHandler(WebSocketClientHandshaker handshaker, WebSocketMessageHandler handler) {
+      super(handshaker, handler);
+    }
+
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) {
+      if (isManualDisconnect) {
+        isManualDisconnect = false;
+      } else {
+        super.channelInactive(ctx);
+        LOG.info("Reopening Poloniex websocket because it was closed by the host");
+        connect().blockingAwait();
+        LOG.info("Resubscribing to Poloniex channels");
+        resubscribeChannels();
+      }
+    }
   }
 }

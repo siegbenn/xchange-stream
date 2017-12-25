@@ -2,6 +2,7 @@ package info.bitrich.xchangestream.gdax;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import info.bitrich.xchangestream.core.ProductSubscription;
 import info.bitrich.xchangestream.gdax.dto.GDAXWebSocketSubscriptionMessage;
 import info.bitrich.xchangestream.gdax.netty.WebSocketClientCompressionAllowClientNoContextHandler;
 import info.bitrich.xchangestream.service.netty.JsonNettyStreamingService;
@@ -9,8 +10,8 @@ import info.bitrich.xchangestream.service.netty.WebSocketClientHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
 import io.netty.handler.codec.http.websocketx.extensions.WebSocketClientExtensionHandler;
+import io.reactivex.Completable;
 import io.reactivex.Observable;
-import org.knowm.xchange.currency.CurrencyPair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -18,68 +19,63 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
-import static info.bitrich.xchangestream.gdax.dto.GDAXWebSocketSubscriptionMessage.PRODUCT_ID;
-import static info.bitrich.xchangestream.gdax.dto.GDAXWebSocketSubscriptionMessage.PRODUCT_IDS;
-
 public class GDAXStreamingService extends JsonNettyStreamingService {
   private static final Logger LOG = LoggerFactory.getLogger(GDAXStreamingService.class);
   private static final String SUBSCRIBE = "subscribe";
   private static final String UNSUBSCRIBE = "unsubscribe";
   private static final String SHARE_CHANNEL_NAME = "ALL";
   private final Map<String, Observable<JsonNode>> subscriptions = new HashMap<>();
-  private CurrencyPair[] currencyPairs = null;
-  
+  private ProductSubscription product = null;
+  private boolean isManualDisconnect = false;
+
+
   private WebSocketClientHandler.WebSocketMessageHandler channelInactiveHandler = null;
 
   public GDAXStreamingService(String apiUrl) {
     super(apiUrl, Integer.MAX_VALUE);
   }
 
+  public ProductSubscription getProduct() {
+    return product;
+  }
+
+  @Override
+  public Completable disconnect() {
+    isManualDisconnect = true;
+    return super.disconnect();
+  }
+
   @Override
   public String getSubscriptionUniqueId(String channelName, Object... args) {
-    if (this.currencyPairs != null) return SHARE_CHANNEL_NAME;
-    else return channelName;
+    return SHARE_CHANNEL_NAME;
   }
 
   /**
-   * Subscribes to the provided channel name, maintains a cache of subscriptions, in order not to 
+   * Subscribes to the provided channel name, maintains a cache of subscriptions, in order not to
    * subscribe more than once to the same channel.
-   * 
+   *
    * @param channelName the name of the requested channel.
    * @return an Observable of json objects coming from the exchange.
    */
   @Override
   public Observable<JsonNode> subscribeChannel(String channelName, Object... args) {
-    if (this.currencyPairs != null) channelName = SHARE_CHANNEL_NAME;
+    channelName = SHARE_CHANNEL_NAME;
 
     if (!channels.containsKey(channelName) && !subscriptions.containsKey(channelName)){
       subscriptions.put(channelName, super.subscribeChannel(channelName, args));
     }
-    
+
     return subscriptions.get(channelName);
   }
-  
+
   @Override
-  protected String getChannelNameFromMessage(JsonNode message) throws IOException {
-    if (this.currencyPairs != null) {
-      return SHARE_CHANNEL_NAME;
-    } else if (message.has(PRODUCT_ID)) {
-      return message.get(PRODUCT_ID).asText();
-    } else {
-      return message.get("channels").get(0).get(PRODUCT_IDS).get(0).asText();
-    }
+  protected String getChannelNameFromMessage(JsonNode message) {
+    return SHARE_CHANNEL_NAME;
   }
 
   @Override
   public String getSubscribeMessage(String channelName, Object... args) throws IOException {
-    GDAXWebSocketSubscriptionMessage subscribeMessage;
-    if (currencyPairs != null) {
-      String[] strCurrencyPairs = new String[currencyPairs.length];
-      for (int i = 0; i < currencyPairs.length; i++) {
-        strCurrencyPairs[i] = currencyPairs[i].base.toString() + "-" + currencyPairs[i].counter.toString();
-      }
-      subscribeMessage = new GDAXWebSocketSubscriptionMessage(SUBSCRIBE, strCurrencyPairs);
-    } else subscribeMessage = new GDAXWebSocketSubscriptionMessage(SUBSCRIBE, channelName);
+    GDAXWebSocketSubscriptionMessage subscribeMessage = new GDAXWebSocketSubscriptionMessage(SUBSCRIBE, product);
     ObjectMapper objectMapper = new ObjectMapper();
     return objectMapper.writeValueAsString(subscribeMessage);
   }
@@ -87,7 +83,7 @@ public class GDAXStreamingService extends JsonNettyStreamingService {
   @Override
   public String getUnsubscribeMessage(String channelName) throws IOException {
     GDAXWebSocketSubscriptionMessage subscribeMessage =
-      new GDAXWebSocketSubscriptionMessage(UNSUBSCRIBE, channelName);
+            new GDAXWebSocketSubscriptionMessage(UNSUBSCRIBE, new String[]{"level2", "matches", "ticker"});
     ObjectMapper objectMapper = new ObjectMapper();
     return objectMapper.writeValueAsString(subscribeMessage);
   }
@@ -101,20 +97,20 @@ public class GDAXStreamingService extends JsonNettyStreamingService {
   protected WebSocketClientExtensionHandler getWebSocketClientExtensionHandler() {
     return WebSocketClientCompressionAllowClientNoContextHandler.INSTANCE;
   }
-  
+
   @Override
-  protected WebSocketClientHandler getWebSocketClientHandler(WebSocketClientHandshaker handshaker, 
+  protected WebSocketClientHandler getWebSocketClientHandler(WebSocketClientHandshaker handshaker,
                                                              WebSocketClientHandler.WebSocketMessageHandler handler) {
     LOG.info("Registering GDAXWebSocketClientHandler");
     return new GDAXWebSocketClientHandler(handshaker, handler);
   }
-  
+
   public void setChannelInactiveHandler(WebSocketClientHandler.WebSocketMessageHandler channelInactiveHandler) {
     this.channelInactiveHandler = channelInactiveHandler;
   }
 
-  public void subscribeMultipleCurrencyPairs(CurrencyPair[] currencyPairs) {
-    this.currencyPairs = currencyPairs;
+  public void subscribeMultipleCurrencyPairs(ProductSubscription... products) {
+    this.product = products[0];
   }
 
   /**
@@ -134,9 +130,14 @@ public class GDAXStreamingService extends JsonNettyStreamingService {
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
-      super.channelInactive(ctx);
-      if (channelInactiveHandler != null){
-        channelInactiveHandler.onMessage("WebSocket Client disconnected!");
+      if (isManualDisconnect) {
+        isManualDisconnect = false;
+      } else {
+        super.channelInactive(ctx);
+        LOG.info("Reopening GDAX websocket because it was closed by the host");
+        connect().blockingAwait();
+        LOG.info("Resubscribing to GDAX channels");
+        resubscribeChannels();
       }
     }
   }
