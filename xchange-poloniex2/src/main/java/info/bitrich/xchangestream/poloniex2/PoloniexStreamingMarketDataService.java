@@ -6,13 +6,17 @@ import info.bitrich.xchangestream.core.StreamingMarketDataService;
 import info.bitrich.xchangestream.poloniex2.dto.*;
 import io.reactivex.Observable;
 import org.knowm.xchange.currency.CurrencyPair;
+import org.knowm.xchange.dto.Order;
 import org.knowm.xchange.dto.marketdata.OrderBook;
 import org.knowm.xchange.dto.marketdata.Ticker;
 import org.knowm.xchange.dto.marketdata.Trade;
+import org.knowm.xchange.poloniex.PoloniexUtils;
+import org.knowm.xchange.poloniex.dto.marketdata.PoloniexPublicTrade;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
+import java.util.Date;
 import java.util.Map;
 import java.util.SortedMap;
 import java.util.concurrent.ConcurrentHashMap;
@@ -70,6 +74,13 @@ public class PoloniexStreamingMarketDataService implements StreamingMarketDataSe
     return subscribedChannel
             .filter(s -> s.getPairId() == currencyPairId)
             .map(s -> adaptPoloniexTicker(s.toPoloniexTicker(currencyPair), currencyPair));
+  }
+
+  private Trade adaptPoloniexPublicTrade(PoloniexPublicTrade poloniexTrade, CurrencyPair currencyPair) {
+    Order.OrderType type = poloniexTrade.getType().equals("1") ? Order.OrderType.BID : Order.OrderType.ASK;
+    Date timestamp = PoloniexUtils.stringToDate(poloniexTrade.getDate());
+    Trade trade = new Trade(type, poloniexTrade.getAmount(), currencyPair, poloniexTrade.getRate(), timestamp, poloniexTrade.getTradeID());
+    return trade;
   }
 
   @Override
